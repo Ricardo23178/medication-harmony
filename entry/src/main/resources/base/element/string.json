@@ -10,7 +10,11 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
+      "value": "安心用药"
+    },
+    {
+      "name": "reason_publish_reminder",
+      "value": "用于在服药时间到达时发出提醒"
     }
   ]
 }

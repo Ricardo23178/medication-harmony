@@ -14,11 +14,13 @@
 | ArkTS / ArkUI | 声明式 UI 开发 |
 | @kit.NetworkKit | HTTP 网络请求 |
 | @kit.ArkData (preferences) | 本地 token 存储 |
+| @kit.BackgroundTasksKit | 代理提醒（reminderAgentManager），到点由系统托管触发 |
+| @kit.NotificationKit | 通知开关确认、通知类型配置 |
 
 ## 功能清单
 
 - [x] 登录 / 注册 / 退出登录
-- [x] 今日服药提醒 + 确认服药
+- [x] 今日服药提醒 + 到点系统通知（代理提醒）+ 确认服药
 - [x] 药品管理（新增 / 列表）
 - [x] 用药计划管理（建计划 / 暂停 / 恢复 / 删除）
 - [x] 家属协同（发起绑定 / 接受邀请 / 解绑 / 异常事件）
@@ -81,7 +83,7 @@ static readonly BASE_URL: string = 'http://127.0.0.1:8080';
 
 ```
 entry/src/main/ets/
-├── common/     # Constants、HttpUtil（网络封装）
+├── common/     # Constants、HttpUtil（网络封装）、ReminderService（代理提醒）
 ├── model/      # 数据模型（对齐后端 VO/DTO）
 ├── pages/      # 页面
 └── entryability/  # EntryAbility
@@ -93,6 +95,9 @@ entry/src/main/ets/
 - **@State 状态管理**：数据变化自动刷新 UI
 - **ForEach 强制刷新**：用「版本号拼 key」的方式，解决列表项内部字段变化不重渲染的问题
 - **Tab 刷新机制**：`currentTab + refreshTick` 两个状态驱动，切 Tab 或从二级页返回时自动刷新
+- **到点提醒用代理提醒，不用后台任务**：`reminderAgentManager.publishReminder` 把「几点几分吃什么」交给系统托管，应用退出、进程被杀、手机重启后依然会响。同步策略是「先 `cancelAllReminders` 再按今日待办重排」，本地不维护「任务 → reminderId」的映射——撤销交给系统一次做完，状态只有一份（后端下发的今日待办），省掉跨天、改计划、后端重排时间三类脏数据。时间已经过去的时段不再注册，否则会在明天同一时刻错响一次。
+- **不用长时任务保活**：吃药提醒是「一天几次、到点一下」的场景，为它常驻后台既费电又占后台配额，代理提醒本来就是给这类定时场景设计的。
+- **通知被关掉要能看见**：`requestEnableNotification` 被拒绝后，提醒照样触发但不会弹出，属于静默失效；今日页顶部会显示一条提示并给「去开启」入口，不让用户以为提醒还活着。
 
 ## 当前阶段优化
 
@@ -116,3 +121,13 @@ entry/src/main/ets/
 ```
 
 脚本默认使用同一安装目录下的SDK TypeScript工具；SDK位于其他位置时设置 `DEVECO_SDK_HOME`。该检查不渲染ArkUI，构建和模拟器验收另行执行。
+
+## 2026-11-23 到点提醒（代理提醒）
+
+此前应用只有「打开后看到今日待办」，没有任何到点提醒——一个叫「用药提醒」的系统，代码里没有提醒能力。
+
+- 新增 `common/ReminderService.ets`（197 行）：`ensureNotificationEnabled` 校通知开关、`syncTodayTasks` 按今日待办重排提醒、`clearAll` 退出登录时清空
+- 今日页拿到列表后同步一次；每次同步先 `cancelAllReminders` 再重排，本地不维护「任务 → reminderId」映射
+- `module.json5` 声明 `ohos.permission.PUBLISH_AGENT_REMINDER`，补 `reason` 与 `usedScene`
+- 应用名从 `MedicationReminder` / `label` 统一成「安心用药」（此前 EntryAbility 的 label 还是占位值 `label`，桌面可能显示成它）
+- 状态：Hvigor 命令行 `assembleHap` 编译通过，31 个 ets / 3843 行，产出 `entry-default-unsigned.hap`（661 KB）；装机与真机响铃待 DevEco 配好签名后验证

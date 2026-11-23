@@ -1,8 +1,10 @@
 import { preferences } from '@kit.ArkData';
 import { promptAction } from '@kit.ArkUI';
 import { router } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { Constants } from '../common/Constants';
 import { HttpUtil } from '../common/HttpUtil';
+import { ReminderService } from '../common/ReminderService';
 import { RemindTaskVO, parseRemindList, parseSimpleResult } from '../model/RemindTask';
 import { ConfirmRequest } from '../model/Request';
 
@@ -159,8 +161,17 @@ export struct HomePage {
   @State loading: boolean = true;
   @State refreshVersion: number = 0;   // 确认后自增，强制 ForEach 重建
   @State submitting: boolean = false;
+  @State notifyEnabled: boolean = true;  // 通知被系统关闭时，界面上要给出提示
 
   async aboutToAppear() {
+    // 先确认通知开关：用户关掉通知后，代理提醒仍然按时触发但不会弹出，
+    // 属于静默失效，所以每次进页面校一次，关着就在顶部提示去开启。
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      this.notifyEnabled = await ReminderService.ensureNotificationEnabled(ctx);
+    } catch (e) {
+      this.notifyEnabled = true;
+    }
     // 读昵称（只在首次读一次）
     try {
       const prefs = await preferences.getPreferences(getContext(), 'medication');
@@ -194,6 +205,9 @@ export struct HomePage {
       if (result.code === 200) {
         this.remindList = result.data.slice();
         this.refreshVersion++;
+        // 每次拿到最新待办就重排系统提醒：确认过的不再响，被后端改过时间的按新时间响。
+        // 撤销交给系统一次做完，本地不维护「任务 → 提醒」的映射。
+        await ReminderService.syncTodayTasks(this.remindList);
       } else {
         promptAction.showToast({ message: result.message });
       }
@@ -265,6 +279,32 @@ export struct HomePage {
       .width('100%')
       .padding({ left: 16, right: 16 })
       .margin({ top: 60, bottom: 20 })
+
+      // 通知被系统关掉时，代理提醒照样到点触发但不会弹出，是静默失效。
+      // 与其让用户以为会响，不如在页面上说清楚，并给一个能直接重开的入口。
+      if (!this.notifyEnabled) {
+        Row() {
+          Text('通知已关闭，到点不会弹出提醒')
+            .fontSize(13)
+            .fontColor('#8a5a00')
+            .layoutWeight(1)
+          Text('去开启')
+            .fontSize(13)
+            .fontColor('#0a59f7')
+            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+            .onClick(() => {
+              const ctx = getContext(this) as common.UIAbilityContext;
+              ReminderService.ensureNotificationEnabled(ctx).then((ok: boolean) => {
+                this.notifyEnabled = ok;
+              });
+            })
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+        .backgroundColor('#fff7e6')
+        .borderRadius(8)
+        .margin({ left: 16, right: 16, bottom: 12 })
+      }
 
       if (this.loading) {
         // 加载中
